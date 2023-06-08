@@ -64,7 +64,7 @@ def create_directory_structure_excel(directory_path, output_file):
 if __name__ == '__main__':
     # directory_path = "CMRxRecon"  # Replace with the actual directory path
     # output_file = "CMRxRecon_check.xlsx"  # Specify the output file name
-    directory_path='/Users/xinyuzhang/Desktop/hi'
-    output_file = '/Users/xinyuzhang/Desktop/test.xlsx'
+    directory_path='X:\CMRxRecon\MICCAIChallenge2023'
+    output_file = 'E:\MRI_Recon_python\DL_Recon\CMRxRecon\Download_Dataset_Check\CMRxRecon_check.xlsx'
 
     create_directory_structure_excel(directory_path, output_file)

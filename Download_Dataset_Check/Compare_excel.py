@@ -97,8 +97,8 @@ def compare_excel_files(file_a, file_b,output_file):
     wb_a.save(output_file)
 
 if __name__ == '__main__':
-    file_a = 'CMRxRecon.xlsx'
-    file_b = 'CMRxRecon_check.xlsx' 
-    output_file = 'Comparison_Result.xlsx'  
+    file_a = 'E:\MRI_Recon_python\DL_Recon\CMRxRecon\Download_Dataset_Check\CMRxRecon.xlsx'
+    file_b = 'E:\MRI_Recon_python\DL_Recon\CMRxRecon\Download_Dataset_Check\CMRxRecon_check.xlsx' 
+    output_file = 'E:\MRI_Recon_python\DL_Recon\CMRxRecon\Download_Dataset_Check\Comparison_Result.xlsx'  
     
     compare_excel_files(file_a, file_b, output_file)

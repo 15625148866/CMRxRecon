@@ -117,9 +117,9 @@ class CMRxReconDataset(Dataset):
             mask = np.load(fname_np_mask)
             target = None
         if self.transform is None:
-            sample = (kspace,mask,target)
+            sample = (kspace,mask,target,fname_np)
         else:
-            sample = self.transform(kspace,mask,target)
+            sample = self.transform(kspace,mask,target,fname_np)
         return sample
 
     

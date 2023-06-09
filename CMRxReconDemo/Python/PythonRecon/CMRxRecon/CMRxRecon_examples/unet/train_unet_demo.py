@@ -9,13 +9,14 @@ from CMRxRecon.data.mri_data import CMRxReconDataset
 import pytorch_lightning as pl
 import time
 from pathlib import Path
-from torch.utils.data import DataLoader, DistributedSampler, SubsetRandomSampler
+from torch.utils.data import DataLoader, DistributedSampler, SubsetRandomSampler, SequentialSampler
 from joblib import Parallel, delayed
 from joblib.externals.loky.backend.context import get_context #for window multi-worker only
 from sklearn.model_selection import KFold
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 import numpy as np
+import torch
 
 def cli_main(args):
     train_transform = UnetDataTransform(args.challenge)
@@ -32,15 +33,21 @@ def cli_main(args):
     k_fold = KFold(n_splits=5,shuffle=True,random_state=42)
     
     for i,(train_idx, val_idx) in enumerate(k_fold.split(np.arange(len(CMRxSingleSliceSingleDynDataset)))):
-        train_sampler = SubsetRandomSampler(train_idx[:32])
-        val_sampler = SubsetRandomSampler(val_idx[:32])
-        train_loader = DataLoader(CMRxSingleSliceSingleDynDataset,batch_size=args.batch_size,sampler=train_sampler)
-        val_loader = DataLoader(CMRxSingleSliceSingleDynDataset, batch_size=args.batch_size, sampler=val_sampler)
-        tb_logger = TensorBoardLogger(save_dir=os.path.join(os.path.dirname(args.data_path),'logs'),name = f'fold_{i+1}')
+        train_sampler = SubsetRandomSampler(train_idx)
+        val_sampler = SequentialSampler(val_idx)
+        train_loader = DataLoader(CMRxSingleSliceSingleDynDataset,
+                                  batch_size=args.batch_size,
+                                  sampler=train_sampler,
+                                  num_workers=args.num_workers)
+        val_loader = DataLoader(CMRxSingleSliceSingleDynDataset,
+                                batch_size=args.batch_size, 
+                                sampler=val_sampler,
+                                num_workers=args.num_workers)
+        tb_logger = TensorBoardLogger(save_dir=args.log_path_dir,name = f'fold_{i+1}')
         checkpoint_callback = ModelCheckpoint(dirpath=tb_logger.log_dir,
-                                              filename="{epoch:02d}--{val_metric:.4f}",
-                                              monitor = "validation_loss",
-                                              mode = "min")
+                                              filename="{epoch:02d}--{validation_loss:4f}--{psnr:4f}",
+                                              monitor = "val_metrics/psnr",
+                                              mode = "max")
         # ------------
         # model
         # ------------
@@ -79,14 +86,19 @@ def cli_main(args):
 
 
 
-def build_args():
+def build_args(challenge:str = 'SingleCoil',
+               task: str = 'Cine',
+               sub_task: str = 'all',
+               acceleration: int = 4,
+               chan = 32):
+    torch.set_float32_matmul_precision('highest')
     parser = ArgumentParser()
 
     num_gpus = 1
     backend = 'ddp'
     accelerator = 'gpu'
-    devices = 'auto'
-    batch_size = 32
+    devices = 'auto'#'
+    batch_size = 16
     root = r'X:\CMRxRecon\MICCAIChallenge2023\ChallengeData'
     default_root_dir = os.path.join(root,'logs','unet')
 
@@ -99,13 +111,24 @@ def build_args():
     )
 
     parser = CMRxReconDataModule.add_data_specific_args(parser)
-    parser.set_defaults(data_path = root, batch_size = batch_size)
+    parser.set_defaults(data_path = root,
+                        batch_size = batch_size,
+                        challenge = challenge,
+                        task = task,
+                        sub_task = sub_task,
+                        acceleration = acceleration)
+    parser.add_argument(
+        "--log_path_dir",
+        default = str(os.path.join(os.path.dirname(root), 'UNet_Img2Img_' + 'chan_' + str(chan) + '_'+ challenge + '_' + task + '_' + sub_task + '_acc' + str(acceleration) + '_logs')),
+        type = str,
+        help = 'log path dir'
+    )
 
     parser = UnetModule.add_model_specific_args(parser)
     parser.set_defaults(
         in_chans=1,  # number of input channels to U-Net
         out_chans=1,  # number of output chanenls to U-Net
-        chans=32,  # number of top-level U-Net channels
+        chans=chan,  # number of top-level U-Net channels
         num_pool_layers=4,  # number of U-Net pooling layers
         drop_prob=0.0,  # dropout probability
         lr=0.001,  # RMSProp learning rate
@@ -126,7 +149,7 @@ def build_args():
         seed=42,  # random seed
         deterministic=True,  # makes things slower, but deterministic
         default_root_dir=default_root_dir,  # directory for logs and checkpoints
-        max_epochs=1,  # max number of epochs
+        max_epochs=50,  # max number of epochs
     )
 
     args = parser.parse_args()

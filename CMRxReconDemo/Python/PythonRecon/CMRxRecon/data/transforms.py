@@ -21,7 +21,7 @@ class UnetSample(NamedTuple):
     target: torch.Tensor
     mean: torch.Tensor
     std: torch.Tensor
-    # fname: str
+    fname: str
     # slice_num: int
     # max_value: float
 
@@ -47,6 +47,7 @@ class UnetDataTransform:
         kspace: np.ndarray,
         mask: np.ndarray,
         target: np.ndarray,
+        fname: str,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, int, float]:
         """
         Args:
@@ -107,11 +108,12 @@ class UnetDataTransform:
             image_full_torch_comb = normalize(image_full_torch_comb, mean_sub, std_sub, eps=1e-11)
             image_full_torch_comb = image_full_torch_comb.clamp(-6, 6)
         else:
-            image_full_torch = torch.Tensor([0])
+            image_full_torch_comb = torch.Tensor([0])
 
         return UnetSample(
             image=image_sub_torch_comb,
             target=image_full_torch_comb,
             mean=mean_sub,
             std=std_sub,
+            fname = fname
         )

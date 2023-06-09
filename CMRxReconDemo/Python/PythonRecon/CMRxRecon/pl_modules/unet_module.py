@@ -79,8 +79,11 @@ class UnetModule(MRIModule):
         output = self(batch.image)
         mean = batch.mean.unsqueeze(1).unsqueeze(2)
         std = batch.std.unsqueeze(1).unsqueeze(2)
+
         return {
             "batch_idx":batch_idx,
+            "fname":batch.fname,
+            "input":batch.image * std + mean,
             "output": output*std + mean,
             "target": batch.target * std + mean,
             "val_loss": F.l1_loss(output,batch.target)

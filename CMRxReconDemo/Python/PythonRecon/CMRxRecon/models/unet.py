@@ -143,7 +143,7 @@ class ConvBlock(nn.Module):
         Returns:
             Output tensor of shape `(N, out_chans, H, W)`.
         """
-        return self.layers(image)
+        return self.layers(image.float())
 
 
 class TransposeConvBlock(nn.Module):

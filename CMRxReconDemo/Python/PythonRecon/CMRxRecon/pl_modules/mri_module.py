@@ -68,7 +68,31 @@ class MRIModule(pl.LightningModule):
         self.TotSliceExamples = DistributedMetricSum()
     
     def validation_step_end(self, val_logs):
-
+        for k in (
+            "batch_idx",
+            "fname",
+            "input",
+            "output",
+            "target",
+            "val_loss"
+        ):
+            if k not in val_logs.keys():
+                raise RuntimeError(
+                    f"Expected key {k} in dict returned by validation_step."
+                )
+        if val_logs["input"].ndim == 2:
+            val_logs["input"] = val_logs["input"].unsqueeze(0)
+        elif val_logs["input"].ndim != 3:
+            raise RuntimeError("Unexpected input size from validation_step.")
+        if val_logs["output"].ndim == 2:
+            val_logs["output"] = val_logs["output"].unsqueeze(0)
+        elif val_logs["output"].ndim != 3:
+            raise RuntimeError("Unexpected output size from validation_step.")
+        if val_logs["target"].ndim == 2:
+            val_logs["target"] = val_logs["target"].unsqueeze(0)
+        elif val_logs["target"].ndim != 3:
+            raise RuntimeError("Unexpected output size from validation_step.")
+        
         #pick a set of images to log if we don't have one already
         if self.val_log_indices is None:
             self.val_log_indices = list(
@@ -85,12 +109,15 @@ class MRIModule(pl.LightningModule):
         for i,batch_idx in enumerate(batch_indices):
             if batch_idx in self.val_log_indices:
                 key = f"val_images_id_{batch_idx}"
+                input = val_logs['input'][i].unsqueeze(0)
                 target = val_logs['target'][i].unsqueeze(0)
                 output = val_logs['output'][i].unsqueeze(0)
                 error = torch.abs(target - output)
+                input = input / input.max()
                 output = output / output.max()
                 target = target / target.max()
                 error = error / error.max()
+                self.log_image(f'{key}/input',input)
                 self.log_image(f'{key}/target',target)
                 self.log_image(f'{key}/reconstruction',output)
                 self.log_image(f'{key}/error',error)
@@ -99,30 +126,30 @@ class MRIModule(pl.LightningModule):
         mse_vals = defaultdict(dict)
         target_norms = defaultdict(dict)
         ssim_vals = defaultdict(dict)
-        max_vals = dict()
+        psnr_vals = defaultdict(dict)
         for i, fname in enumerate(val_logs['fname']):
-            slice_num = int(val_logs['slice_num'][i].cpu())
-            maxval = val_logs['max_value'][i].cpu().numpy()
             output = val_logs['output'][i].cpu().numpy()
             target = val_logs['target'][i].cpu().numpy()
 
-            mse_vals[fname][slice_num] = torch.tensor(
+            mse_vals[fname] = torch.tensor(
                 evaluate.mse(target,output)
             ).view(1)
-            target_norms[fname][slice_num] = torch.tensor(
+            target_norms[fname] = torch.tensor(
                 evaluate.mse(target, np.zeros_like(target))
             ).view(1)
-            ssim_vals[fname][slice_num] = torch.tensor(
-                evaluate.ssim(target[None,...],output[None,...], maxval = maxval)
+            ssim_vals[fname] = torch.tensor(
+                evaluate.ssim(target[None,...],output[None,...], maxval = None)
             ).view(1)
-            max_vals[fname] = maxval
+            psnr_vals[fname] = torch.tensor(
+                evaluate.psnr(target[None,...],output[None,...], maxval = None)
+            ).view(1)
         
         return {
             "val_loss": val_logs['val_loss'],
             'mse_vals': dict(mse_vals),
             'target_norms': dict(target_norms),
             'ssim_vals': dict(ssim_vals),
-            'max_vals': max_vals
+            'psnr_vals':dict(psnr_vals)
         }
         
         
@@ -134,68 +161,63 @@ class MRIModule(pl.LightningModule):
         mse_vals = defaultdict(dict)
         target_norms = defaultdict(dict)
         ssim_vals = defaultdict(dict)
-        max_vals = dict()
+        psnr_vals = defaultdict(dict)
 
         #use dict updates to handle duplicate slices
         for val_log in val_logs:
             losses.append(val_log["val_loss"].view(-1))
 
             for k in val_log["mse_vals"].keys():
-                mse_vals[k].update(val_log["mse_vals"][k])
+                mse_vals.update(val_log["mse_vals"])
             for k in val_log["target_norms"].keys():
-                target_norms[k].update(val_log["target_norms"][k])
+                target_norms.update(val_log["target_norms"])
             for k in val_log["ssim_vals"].keys():
-                ssim_vals[k].update(val_log["ssim_vals"][k])
-            for k in val_log["max_vals"]:
-                max_vals[k] = val_log["max_vals"][k]
+                ssim_vals.update(val_log["ssim_vals"])
+            for k in val_log["psnr_vals"].keys():
+                psnr_vals.update(val_log["psnr_vals"])
         
         #check to make sure we have all files in all metrics
         assert(
             mse_vals.keys()
             == target_norms.keys()
             == ssim_vals.keys()
-            == max_vals.keys()
+            == psnr_vals.keys()
         )
 
         #apply means across image volumes
         metrics = {"nmse":0, "ssim":0, "psnr":0}
         local_example = 0
-        for fname in mse_vals.keys():
-            local_example = local_example + 1
-            mse_val = torch.mean(
-                torch.cat([v.view(-1) for _,v in mse_vals[fname].items()])
-            )
-            target_norm = torch.mean(
-                torch.cat([v.view(-1) for _,v in target_norms[fname].items()])
-            )
-            metrics["nmse"] = metrics["nmse"] + mse_val / target_norm
-            metrics['psnr'] = (
-                metrics['psnr']
-                + 20
-                * torch.log10(
-                    torch.tensor(
-                        max_vals[fname],dtype=mse_val.dtype,device=mse_val.device
-                    )
-                )
-                - 10 * torch.log10(mse_val)
-            )
-            metrics['ssim'] = metrics['ssim'] + torch.mean(
-                torch.cat([v.view(-1) for _,v in ssim_vals[fname].items()])
-            )
+
+        local_example = local_example + len(mse_vals.keys())
+        mse_val = torch.mean(
+                torch.cat([v.view(-1) for _,v in mse_vals.items()])
+        )
+        target_norm = torch.mean(
+                torch.cat([v.view(-1) for _,v in target_norms.items()])
+        )
+        metrics["nmse"] = torch.mean(
+            torch.cat([mse_vals[key].view(-1) / target_norms[key].view(-1) for key in mse_vals.keys()])
+        )
+        metrics['psnr'] = torch.mean(
+                torch.cat([v.view(-1) for _,v in psnr_vals.items()])
+        )
+        metrics['ssim'] = torch.mean(
+                torch.cat([v.view(-1) for _,v in ssim_vals.items()])
+        )
         
         #reduce across ddp via sum
         metrics['nmse'] = self.NMSE(metrics['nmse'])
         metrics['ssim'] = self.SSIM(metrics['ssim'])
         metrics['psnr'] = self.PSNR(metrics['psnr'])
         tot_examples = self.TotExamples(torch.tensor(local_example))
-        val_loss = self.ValLoss(torch.sum(torch.cat(losses)))
+        val_loss = self.ValLoss(torch.sum(torch.cat(losses)).to('cpu'))
         tot_slice_examples = self.TotSliceExamples(
             torch.tensor(len(losses),dtype=torch.float)
         )
 
         self.log('validation_loss', val_loss/ tot_slice_examples, prog_bar=True)
         for metric, value in metrics.items():
-            self.log(f"val_metrics/{metric}",value/tot_examples)
+            self.log(f"val_metrics/{metric}",value)
 
     
     @staticmethod
